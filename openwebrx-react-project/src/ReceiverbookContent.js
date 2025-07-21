@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Card, Table, Button, Row, Col, Form } from 'react-bootstrap'; // Added Form for sliders
+import { Card, Table, Button, Row, Col, Form } from 'react-bootstrap';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css'; // Import Leaflet CSS
 import L from 'leaflet'; // Import Leaflet for custom icon
@@ -14,15 +14,27 @@ L.Icon.Default.mergeOptions({
 
 // Dummy data for receivers with coordinates
 const dummyReceivers = [
-  { id: 1, name: 'IZ0FKE - ROMA', location: 'Rome, Italy', frequencyRange: 'HF, VHF', status: 'Online', url: '#', lat: 41.9028, lng: 12.4964 },
-  { id: 2, name: 'DL1ABC - BERLIN', location: 'Berlin, Germany', frequencyRange: 'VHF, UHF', status: 'Online', url: '#', lat: 52.5200, lng: 13.4050 },
-  { id: 3, name: 'W1XYZ - NEW YORK', location: 'New York, USA', frequencyRange: 'HF', status: 'Offline', url: '#', lat: 40.7128, lng: -74.0060 },
-  { id: 4, name: 'JA7DEF - TOKYO', location: 'Tokyo, Japan', frequencyRange: 'UHF', status: 'Online', url: '#', lat: 35.6895, lng: 139.6917 },
-  { id: 5, name: 'VK2GHI - SYDNEY', location: 'Sydney, Australia', frequencyRange: 'HF, VHF', status: 'Online', url: '#', lat: -33.8688, lng: 151.2093 },
-  { id: 6, name: 'G8PQR - LONDON', location: 'London, UK', frequencyRange: 'VHF', status: 'Online', url: '#', lat: 51.5074, lng: -0.1278 },
-  { id: 7, name: 'F5STU - PARIS', location: 'Paris, France', frequencyRange: 'UHF', status: 'Offline', url: '#', lat: 48.8566, lng: 2.3522 },
-  { id: 8, name: 'VE3UVW - TORONTO', location: 'Toronto, Canada', frequencyRange: 'HF', status: 'Online', url: '#', lat: 43.6532, lng: -79.3832 },
+  { id: 1, name: 'IZ0FKE - ROMA', location: 'Rome, Italy', frequencyRange: 'HF, VHF', status: 'Online', url: '#', lat: 41.9028, lng: 12.4964, defaultFreq: 145.675 },
+  { id: 2, name: 'DL1ABC - BERLIN', location: 'Berlin, Germany', frequencyRange: 'VHF, UHF', status: 'Online', url: '#', lat: 52.5200, lng: 13.4050, defaultFreq: 433.000 },
+  { id: 3, name: 'W1XYZ - NEW YORK', location: 'New York, USA', frequencyRange: 'HF', status: 'Offline', url: '#', lat: 40.7128, lng: -74.0060, defaultFreq: 7.100 },
+  { id: 4, name: 'JA7DEF - TOKYO', location: 'Tokyo, Japan', frequencyRange: 'UHF', status: 'Online', url: '#', lat: 35.6895, lng: 139.6917, defaultFreq: 446.000 },
+  { id: 5, name: 'VK2GHI - SYDNEY', location: 'Sydney, Australia', frequencyRange: 'HF, VHF', status: 'Online', url: '#', lat: -33.8688, lng: 151.2093, defaultFreq: 28.500 },
+  { id: 6, name: 'G8PQR - LONDON', location: 'London, UK', frequencyRange: 'VHF', status: 'Online', url: '#', lat: 51.5074, lng: -0.1278, defaultFreq: 144.800 },
+  { id: 7, name: 'F5STU - PARIS', location: 'Paris, France', frequencyRange: 'UHF', status: 'Offline', url: '#', lat: 48.8566, lng: 2.3522, defaultFreq: 430.000 },
+  { id: 8, name: 'VE3UVW - TORONTO', location: 'Toronto, Canada', frequencyRange: 'HF', status: 'Online', url: '#', lat: 43.6532, lng: -79.3832, defaultFreq: 14.200 },
 ];
+
+// Dummy data for station markers (relative to the center of the displayed spectrum)
+const dummyStationMarkers = [
+  { callsign: 'IZ0RIN', freqOffsetKHz: -50, type: 'Voice' },
+  { callsign: 'PACKET', freqOffsetKHz: 20, type: 'Data' },
+  { callsign: 'IQ0FP', freqOffsetKHz: 100, type: 'Voice' },
+  { callsign: 'FT8-DX', freqOffsetKHz: -120, type: 'Digital' },
+  { callsign: 'DMR-TG', freqOffsetKHz: 70, type: 'Digital' },
+];
+
+// Define the total bandwidth displayed by the spectrum canvas in kHz
+const DISPLAYED_SPECTRUM_BANDWIDTH_KHZ = 200; // e.g., 200 kHz
 
 function ReceiverbookContent({ theme }) {
   const [meteoData, setMeteoData] = useState('Loading meteo data...');
@@ -39,10 +51,31 @@ function ReceiverbookContent({ theme }) {
   const [waterfallMinLevel, setWaterfallMinLevel] = useState(-100); // dBm
   const [waterfallMaxLevel, setWaterfallMaxLevel] = useState(-30); // dBm
 
+  // Receiver Control States
+  const [currentFrequency, setCurrentFrequency] = useState(null); // MHz
+  const [selectedMode, setSelectedMode] = useState('FM');
+  const [volume, setVolume] = useState(70); // 0-100
+  const [squelch, setSquelch] = useState(-90); // dBm
+  const [bandwidth, setBandwidth] = useState('12.5 kHz');
+  const [noiseReduction, setNoiseReduction] = useState(0); // -10 to 10
+  const [isRecording, setIsRecording] = useState(false);
+  const [currentSignalLevel, setCurrentSignalLevel] = useState(-100); // dBm
+  const [currentTime, setCurrentTime] = useState(''); // UTC time
+
+  // State for tuning cursor position and dragging
+  const [tuningCursorX, setTuningCursorX] = useState(0); // Pixel position on spectrum canvas
+  const [isDraggingCursor, setIsDraggingCursor] = useState(false);
+
   // Determine Bootstrap variant for Card and Table based on theme
   const cardBg = theme === 'light' ? 'white' : 'dark';
   const cardText = theme === 'light' ? 'dark' : 'white';
   const tableVariant = theme === 'light' ? 'light' : 'dark';
+  const inputBg = theme === 'light' ? 'white' : '#495057'; // Darker input background for dark mode
+  const inputText = theme === 'light' ? 'dark' : 'white';
+  const inputBorder = theme === 'light' ? 'border-secondary' : 'border-info'; // Brighter border for dark mode inputs
+  const linkColor = theme === 'light' ? 'text-primary' : 'text-info'; // Use info for links in dark mode
+  const mutedText = theme === 'light' ? 'text-muted' : 'text-light'; // For small, muted text
+
 
   // Simulate API calls
   useEffect(() => {
@@ -104,17 +137,17 @@ function ReceiverbookContent({ theme }) {
   // Function to generate simulated frequency data
   const generateSimulatedData = useCallback((numPoints) => {
     const data = new Float32Array(numPoints);
-    const centerFreq = numPoints / 2;
-    const bandwidth = numPoints * 0.4; // 40% of the width
+    const centerFreqIndex = numPoints / 2;
+    const bandwidthIndex = numPoints * 0.4; // 40% of the width
 
     for (let i = 0; i < numPoints; i++) {
       // Base noise level
       let value = -120 + Math.random() * 30; // -120 dBm to -90 dBm
 
       // Add a wide hump in the middle
-      const distFromCenter = Math.abs(i - centerFreq);
-      if (distFromCenter < bandwidth / 2) {
-        value += 50 * (1 - (distFromCenter / (bandwidth / 2)) ** 2); // Parabolic hump
+      const distFromCenter = Math.abs(i - centerFreqIndex);
+      if (distFromCenter < bandwidthIndex / 2) {
+        value += 50 * (1 - (distFromCenter / (bandwidthIndex / 2)) ** 2); // Parabolic hump
       }
 
       // Add a few random, sharper peaks
@@ -140,11 +173,21 @@ function ReceiverbookContent({ theme }) {
     const normalizedLevel = (level - waterfallMinLevel) / (waterfallMaxLevel - waterfallMinLevel);
     const clampedLevel = Math.max(0, Math.min(1, normalizedLevel));
 
-    // Create a color gradient (e.g., blue -> green -> yellow -> red)
-    const r = Math.floor(255 * clampedLevel);
-    const g = Math.floor(255 * (1 - clampedLevel));
-    const b = 0; // Keep blue low for warmer colors at high signal
-    return `rgb(${r}, ${g}, ${b})`;
+    // Create a color gradient (more vibrant)
+    // Using HSL for better control over color transitions
+    let h, s, l;
+    if (clampedLevel < 0.5) {
+      // Transition from blue (low) to green (mid)
+      h = 240 - (clampedLevel * 2 * 120); // 240 (blue) to 120 (green)
+      s = 100;
+      l = 20 + (clampedLevel * 2 * 30); // Darker blue to brighter green
+    } else {
+      // Transition from green (mid) to red (high)
+      h = 120 - ((clampedLevel - 0.5) * 2 * 120); // 120 (green) to 0 (red)
+      s = 100;
+      l = 50 - ((clampedLevel - 0.5) * 2 * 20); // Brighter green to slightly darker red
+    }
+    return `hsl(${h}, ${s}%, ${l}%)`;
   }, [waterfallMinLevel, waterfallMaxLevel]);
 
 
@@ -160,9 +203,7 @@ function ReceiverbookContent({ theme }) {
     const spectrumCtx = spectrumCanvas.getContext('2d');
     const waterfallCtx = waterfallCanvas.getContext('2d');
 
-    const spectrumWidth = spectrumCanvas.width;
     const spectrumHeight = spectrumCanvas.height;
-    const waterfallWidth = waterfallCanvas.width;
     const waterfallHeight = waterfallCanvas.height;
 
     // Set canvas dimensions to match display size for sharp rendering
@@ -171,9 +212,11 @@ function ReceiverbookContent({ theme }) {
       if (container) {
         const rect = container.getBoundingClientRect();
         spectrumCanvas.width = rect.width;
-        spectrumCanvas.height = spectrumHeight; // Keep fixed height for spectrum
         waterfallCanvas.width = rect.width;
-        waterfallCanvas.height = waterfallHeight; // Keep fixed height for waterfall
+        // Initialize tuning cursor to center if it's the first render or receiver changes
+        if (tuningCursorX === 0 || tuningCursorX === 800) { // Check for initial or default width
+          setTuningCursorX(rect.width / 2);
+        }
       }
     };
     updateCanvasDimensions(); // Initial set
@@ -183,25 +226,51 @@ function ReceiverbookContent({ theme }) {
     const frameRate = 30; // Target 30 frames per second for waterfall update
     const interval = 1000 / frameRate;
 
-    const draw = (currentTime) => {
+    const draw = (currentTimeStamp) => {
       if (!selectedReceiver) {
         cancelAnimationFrame(animationFrameId.current);
         return;
       }
 
-      const deltaTime = currentTime - lastFrameTime;
+      const deltaTime = currentTimeStamp - lastFrameTime;
 
-      // Only update waterfall and generate new data at a slower rate
       if (deltaTime > interval) {
-        lastFrameTime = currentTime - (deltaTime % interval); // Adjust lastFrameTime
+        lastFrameTime = currentTimeStamp - (deltaTime % interval);
+
+        const spectrumWidth = spectrumCanvas.width;
+        const waterfallWidth = waterfallCanvas.width;
 
         const data = generateSimulatedData(spectrumWidth);
+
+        // Calculate frequency at cursor position
+        const pixelsPerKHz = spectrumWidth / DISPLAYED_SPECTRUM_BANDWIDTH_KHZ;
+        const frequencyAtCursorKHz = (selectedReceiver.defaultFreq * 1000 - (DISPLAYED_SPECTRUM_BANDWIDTH_KHZ / 2)) + (tuningCursorX / pixelsPerKHz);
+        setCurrentFrequency((frequencyAtCursorKHz / 1000).toFixed(4));
+
+        // Simulate signal level (e.g., average of data points)
+        const avgSignal = data.reduce((sum, val) => sum + val, 0) / data.length;
+        setCurrentSignalLevel(avgSignal.toFixed(1));
+
+        // Update current time
+        setCurrentTime(new Date().toUTCString().split(' ')[4] + ' UTC');
 
         // --- Draw Spectrum ---
         spectrumCtx.clearRect(0, 0, spectrumWidth, spectrumHeight);
         spectrumCtx.fillStyle = theme === 'light' ? '#e0e0e0' : '#333';
         spectrumCtx.fillRect(0, 0, spectrumWidth, spectrumHeight);
 
+        // Draw horizontal grid lines
+        spectrumCtx.strokeStyle = theme === 'light' ? '#ccc' : '#555';
+        spectrumCtx.lineWidth = 0.5;
+        for (let i = 1; i < 5; i++) {
+          const y = (spectrumHeight / 5) * i;
+          spectrumCtx.beginPath();
+          spectrumCtx.moveTo(0, y);
+          spectrumCtx.lineTo(spectrumWidth, y);
+          spectrumCtx.stroke();
+        }
+
+        // Draw spectrum line
         spectrumCtx.strokeStyle = theme === 'light' ? '#28a745' : '#00ff00'; // Green
         spectrumCtx.lineWidth = 2;
         spectrumCtx.beginPath();
@@ -220,25 +289,73 @@ function ReceiverbookContent({ theme }) {
         spectrumCtx.closePath();
         spectrumCtx.fill();
 
-        // Add center frequency marker
+        // Add tuning cursor
         spectrumCtx.strokeStyle = theme === 'light' ? '#dc3545' : '#ffc107'; // Red/Yellow
-        spectrumCtx.lineWidth = 1;
-        spectrumCtx.setLineDash([5, 5]);
+        spectrumCtx.lineWidth = 2; // Make cursor line a bit thicker
+        spectrumCtx.setLineDash([5, 5]); // Dashed line for tuning cursor
         spectrumCtx.beginPath();
-        spectrumCtx.moveTo(spectrumWidth / 2, 0);
-        spectrumCtx.lineTo(spectrumWidth / 2, spectrumHeight);
+        spectrumCtx.moveTo(tuningCursorX, 0);
+        spectrumCtx.lineTo(tuningCursorX, spectrumHeight);
         spectrumCtx.stroke();
-        spectrumCtx.setLineDash([]);
+        spectrumCtx.setLineDash([]); // Reset line dash
 
-        // Add frequency labels
+        // Draw tuning cursor triangle
+        spectrumCtx.fillStyle = theme === 'light' ? '#dc3545' : '#ffc107';
+        spectrumCtx.beginPath();
+        spectrumCtx.moveTo(tuningCursorX - 5, 0);
+        spectrumCtx.lineTo(tuningCursorX + 5, 0);
+        spectrumCtx.lineTo(tuningCursorX, 10);
+        spectrumCtx.closePath();
+        spectrumCtx.fill();
+
+        // Add frequency labels (relative to fixed displayed bandwidth)
         spectrumCtx.fillStyle = theme === 'light' ? '#333' : '#eee';
         spectrumCtx.font = '12px Arial';
         spectrumCtx.textAlign = 'center';
-        spectrumCtx.fillText('Center Freq', spectrumWidth / 2, spectrumHeight - 10);
+
+        // Center frequency label
+        spectrumCtx.fillText(
+          `${(selectedReceiver.defaultFreq).toFixed(3)} MHz (Center)`,
+          spectrumWidth / 2,
+          spectrumHeight - 10
+        );
+
+        // Low and High frequency labels
+        const lowFreq = (selectedReceiver.defaultFreq - DISPLAYED_SPECTRUM_BANDWIDTH_KHZ / 2000).toFixed(3);
+        const highFreq = (selectedReceiver.defaultFreq + DISPLAYED_SPECTRUM_BANDWIDTH_KHZ / 2000).toFixed(3);
         spectrumCtx.textAlign = 'left';
-        spectrumCtx.fillText('Low Freq', 10, spectrumHeight - 10);
+        spectrumCtx.fillText(`${lowFreq} MHz`, 10, spectrumHeight - 10);
         spectrumCtx.textAlign = 'right';
-        spectrumCtx.fillText('High Freq', spectrumWidth - 10, spectrumHeight - 10);
+        spectrumCtx.fillText(`${highFreq} MHz`, spectrumWidth - 10, spectrumHeight - 10);
+
+
+        // --- Draw Station Markers ---
+        dummyStationMarkers.forEach(marker => {
+          // Calculate x position based on frequency offset from the *center of the displayed spectrum*
+          const markerX = (spectrumWidth / 2) + (marker.freqOffsetKHz * pixelsPerKHz);
+
+          if (markerX >= 0 && markerX <= spectrumWidth) {
+            // Draw vertical line for marker
+            spectrumCtx.strokeStyle = theme === 'light' ? '#007bff' : '#00bcd4'; // Blue/Cyan for markers
+            spectrumCtx.lineWidth = 1;
+            spectrumCtx.beginPath();
+            spectrumCtx.moveTo(markerX, 0);
+            spectrumCtx.lineTo(markerX, spectrumHeight);
+            spectrumCtx.stroke();
+
+            // Draw callsign text
+            spectrumCtx.fillStyle = theme === 'light' ? '#007bff' : '#00bcd4'; // Blue/Cyan text
+            spectrumCtx.font = '10px Arial';
+            spectrumCtx.textAlign = 'center';
+            // Position text slightly above the bottom or top, rotate for better readability
+            spectrumCtx.save();
+            spectrumCtx.translate(markerX, spectrumHeight - 25);
+            spectrumCtx.rotate(-Math.PI / 4); // Rotate -45 degrees
+            spectrumCtx.fillText(marker.callsign, 0, 0);
+            spectrumCtx.restore();
+          }
+        });
+
 
         // --- Draw Waterfall ---
         // Shift existing pixels up by one row
@@ -260,20 +377,54 @@ function ReceiverbookContent({ theme }) {
       cancelAnimationFrame(animationFrameId.current);
       window.removeEventListener('resize', updateCanvasDimensions);
     };
-  }, [selectedReceiver, theme, generateSimulatedData, getWaterfallColor, waterfallMinLevel, waterfallMaxLevel]);
+  }, [selectedReceiver, theme, generateSimulatedData, getWaterfallColor, waterfallMinLevel, waterfallMaxLevel, tuningCursorX]);
 
 
   // Function to handle tuning in to a receiver
   const handleTuneIn = (receiver) => {
     setSelectedReceiver(receiver);
-    // Optionally scroll to the spectrum section
+    // Initialize tuning cursor to center when a receiver is selected
+    const canvas = spectrumCanvasRef.current;
+    if (canvas) {
+      setTuningCursorX(canvas.width / 2);
+    } else {
+      setTuningCursorX(400); // Fallback if canvas ref not ready (initial render)
+    }
+    setCurrentFrequency(receiver.defaultFreq); // Set initial frequency
+    // Optionally scroll to the receiver control panel
     setTimeout(() => {
-      const spectrumSection = document.getElementById('spectrum-display');
-      if (spectrumSection) {
-        spectrumSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const receiverPanel = document.getElementById('receiver-control-panel');
+      if (receiverPanel) {
+        receiverPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     }, 100); // Small delay to allow state update and render
   };
+
+  // Mouse event handlers for tuning cursor
+  const handleMouseDown = (e) => {
+    setIsDraggingCursor(true);
+    setTuningCursorX(e.nativeEvent.offsetX);
+  };
+
+  const handleMouseMove = (e) => {
+    if (isDraggingCursor) {
+      let newX = e.nativeEvent.offsetX;
+      const canvas = spectrumCanvasRef.current;
+      if (canvas) {
+        newX = Math.max(0, Math.min(canvas.width, newX));
+      }
+      setTuningCursorX(newX);
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDraggingCursor(false);
+  };
+
+  const handleMouseLeave = () => {
+    setIsDraggingCursor(false); // Stop dragging if mouse leaves canvas area
+  };
+
 
   return (
     <Card className={`shadow-sm mb-5 p-4 rounded-lg bg-${cardBg} text-${cardText}`}>
@@ -288,14 +439,14 @@ function ReceiverbookContent({ theme }) {
           <Button
             variant={view === 'list' ? 'success' : 'outline-success'}
             onClick={() => setView('list')}
-            className="fw-semibold px-4 py-2 rounded-pill"
+            className="fw-semibold px-4 py-2 rounded-pill hover-btn-scale"
           >
             List View
           </Button>
           <Button
             variant={view === 'map' ? 'primary' : 'outline-primary'}
             onClick={() => setView('map')}
-            className="fw-semibold px-4 py-2 rounded-pill"
+            className="fw-semibold px-4 py-2 rounded-pill hover-btn-scale"
           >
             Map View
           </Button>
@@ -334,6 +485,7 @@ function ReceiverbookContent({ theme }) {
                         size="sm"
                         onClick={() => handleTuneIn(receiver)} // Use onClick to set selected receiver
                         disabled={receiver.status === 'Offline'}
+                        className="hover-btn-scale-sm"
                       >
                         Tune In
                       </Button>
@@ -364,7 +516,7 @@ function ReceiverbookContent({ theme }) {
                         size="sm"
                         onClick={() => handleTuneIn(receiver)} // Use onClick to set selected receiver
                         disabled={receiver.status === 'Offline'}
-                        className="mt-2"
+                        className="mt-2 hover-btn-scale-sm"
                       >
                         Tune In
                       </Button>
@@ -397,9 +549,9 @@ function ReceiverbookContent({ theme }) {
               </tr>
               <tr>
                 <td colSpan="3" className="animated-row py-2">
-                  <a href="https://webclx.noantri.org" target="_blank" rel="noopener noreferrer" className="text-danger text-decoration-none mx-2 fw-bold">WEBCLX</a>
-                  <a href="https://sdr.noantri.org/hamclock-live/live.html" target="_blank" rel="noopener noreferrer" className="text-danger text-decoration-none mx-2 fw-bold">HAMCLOCK</a>
-                  <a href="https://sdr.noantri.org/dash/hamdash.html" target="_blank" rel="noopener noreferrer" className="text-danger text-decoration-none mx-2 fw-bold">DASHBOARD</a>
+                  <a href="https://webclx.noantri.org" target="_blank" rel="noopener noreferrer" className={`${linkColor} text-decoration-none hover-underline`}>WEBCLX</a>
+                  <a href="https://sdr.noantri.org/hamclock-live/live.html" target="_blank" rel="noopener noreferrer" className={`${linkColor} text-decoration-none mx-2 fw-bold hover-underline`}>HAMCLOCK</a>
+                  <a href="https://sdr.noantri.org/dash/hamdash.html" target="_blank" rel="noopener noreferrer" className={`${linkColor} text-decoration-none hover-underline`}>DASHBOARD</a>
                 </td>
               </tr>
               <tr>
@@ -417,72 +569,262 @@ function ReceiverbookContent({ theme }) {
         </div>
       </Card.Body>
 
-      {/* Spectrum and Waterfall Display Section - Conditionally rendered */}
+      {/* Receiver Controls Panel and Frequency Spectrum and Station Activity Panel - Conditionally rendered */}
       {selectedReceiver && (
-        <Card id="spectrum-display" className={`shadow-sm mt-5 p-4 rounded-lg bg-${cardBg} text-${cardText}`}>
-          <Card.Body>
-            <div className="d-flex justify-content-between align-items-center mb-3">
-              <h3 className="h4 fw-bold mb-0">Live Spectrum & Waterfall for {selectedReceiver.name}</h3>
-              <Button variant="danger" size="sm" onClick={() => setSelectedReceiver(null)}>
-                Close Display
-              </Button>
-            </div>
-            <p className="text-muted small">
-              Simulated live display for {selectedReceiver.location} ({selectedReceiver.frequencyRange})
-            </p>
+        <>
+          <Card id="receiver-control-panel" className={`shadow-sm mt-5 p-4 rounded-lg bg-${cardBg} text-${cardText}`}>
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h3 className="h4 fw-bold mb-0">Main Receiver Control Panel: {selectedReceiver.name}</h3>
+                <Button variant="danger" size="sm" onClick={() => setSelectedReceiver(null)} className="hover-btn-scale-sm">
+                  Close Receiver
+                </Button>
+              </div>
+              <p className={`${mutedText} small mb-4`}>
+                Controlling {selectedReceiver.location} ({selectedReceiver.frequencyRange})
+              </p>
 
-            {/* Spectrum Canvas */}
-            <h5 className="mt-4 mb-2 text-primary">Spectrum</h5>
-            <div className="spectrum-canvas-container" style={{ position: 'relative', width: '100%', height: '250px', border: `1px solid ${theme === 'light' ? '#ccc' : '#555'}`, borderRadius: '4px', overflow: 'hidden' }}>
-              <canvas ref={spectrumCanvasRef} width="800" height="250" style={{ display: 'block', width: '100%', height: '100%' }}></canvas>
-            </div>
-
-            {/* Waterfall Canvas */}
-            <h5 className="mt-4 mb-2 text-primary">Waterfall</h5>
-            <div className="waterfall-canvas-container" style={{ position: 'relative', width: '100%', height: '200px', border: `1px solid ${theme === 'light' ? '#ccc' : '#555'}`, borderRadius: '4px', overflow: 'hidden' }}>
-              <canvas ref={waterfallCanvasRef} width="800" height="200" style={{ display: 'block', width: '100%', height: '100%' }}></canvas>
-            </div>
-
-            {/* Waterfall Controls */}
-            <div className="mt-4">
-              <h5 className="mb-3 text-primary">Waterfall Color Levels (dBm)</h5>
-              <Row className="align-items-center mb-3">
-                <Col xs={12} md={2}>
-                  <Form.Label className="mb-0">Min Level: {waterfallMinLevel} dBm</Form.Label>
+              {/* Frequency Display */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Frequency:</Form.Label>
                 </Col>
-                <Col xs={12} md={10}>
+                <Col xs={12} md={8}>
+                  <div className={`p-2 rounded text-center fw-bold fs-5 bg-${inputBg} text-${inputText} border border-info`}>
+                    {currentFrequency ? currentFrequency : 'N/A'} MHz
+                  </div>
+                </Col>
+              </Row>
+
+              {/* Receiver Selection (Static for this template) */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Receiver:</Form.Label>
+                </Col>
+                <Col xs={12} md={8}>
+                  <Form.Control
+                    as="select"
+                    value={selectedReceiver.id}
+                    onChange={(e) => handleTuneIn(dummyReceivers.find(r => r.id === parseInt(e.target.value)))}
+                    className={`bg-${inputBg} text-${inputText} ${inputBorder}`}
+                  >
+                    {dummyReceivers.map(r => (
+                      <option key={r.id} value={r.id}>
+                        #{r.id} {r.name} ({r.frequencyRange})
+                      </option>
+                    ))}
+                  </Form.Control>
+                </Col>
+              </Row>
+
+              {/* Modes */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Mode:</Form.Label>
+                </Col>
+                <Col xs={12} md={8}>
+                  <Form.Control
+                    as="select"
+                    value={selectedMode}
+                    onChange={(e) => setSelectedMode(e.target.value)}
+                    className={`bg-${inputBg} text-${inputText} ${inputBorder}`}
+                  >
+                    <option>AM</option>
+                    <option>FM</option>
+                    <option>USB</option>
+                    <option>LSB</option>
+                    <option>CW</option>
+                    <option>DMR</option>
+                    <option>FT8</option>
+                  </Form.Control>
+                </Col>
+              </Row>
+
+              {/* Volume Control */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Volume: {volume}</Form.Label>
+                </Col>
+                <Col xs={12} md={8}>
                   <Form.Range
-                    min="-150"
-                    max="-50"
-                    step="1"
-                    value={waterfallMinLevel}
-                    onChange={(e) => setWaterfallMinLevel(parseInt(e.target.value))}
+                    min="0"
+                    max="100"
+                    value={volume}
+                    onChange={(e) => setVolume(parseInt(e.target.value))}
                     className={`form-range-${theme}`}
                   />
                 </Col>
               </Row>
-              <Row className="align-items-center">
-                <Col xs={12} md={2}>
-                  <Form.Label className="mb-0">Max Level: {waterfallMaxLevel} dBm</Form.Label>
+
+              {/* Squelch Control */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Squelch (SQ): {squelch} dBm</Form.Label>
                 </Col>
-                <Col xs={12} md={10}>
+                <Col xs={12} md={8}>
                   <Form.Range
-                    min="-40"
-                    max="0"
-                    step="1"
-                    value={waterfallMaxLevel}
-                    onChange={(e) => setWaterfallMaxLevel(parseInt(e.target.value))}
+                    min="-120"
+                    max="-30"
+                    value={squelch}
+                    onChange={(e) => setSquelch(parseInt(e.target.value))}
                     className={`form-range-${theme}`}
                   />
                 </Col>
               </Row>
-            </div>
 
-            <p className="mt-3 text-muted small">
-              This is a simulated live spectrum and waterfall display. In a real OpenWebRX project, this would visualize actual radio signals.
-            </p>
-          </Card.Body>
-        </Card>
+              {/* Bandwidth Selector */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Bandwidth:</Form.Label>
+                </Col>
+                <Col xs={12} md={8}>
+                  <Form.Control
+                    as="select"
+                    value={bandwidth}
+                    onChange={(e) => setBandwidth(e.target.value)}
+                    className={`bg-${inputBg} text-${inputText} ${inputBorder}`}
+                  >
+                    <option>2.4 kHz</option>
+                    <option>6 kHz</option>
+                    <option>9 kHz</option>
+                    <option>12.5 kHz</option>
+                    <option>25 kHz</option>
+                    <option>100 kHz</option>
+                    <option>200 kHz</option>
+                  </Form.Control>
+                </Col>
+              </Row>
+
+              {/* Noise Reduction Control */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Noise Reduction (NR): {noiseReduction}</Form.Label>
+                </Col>
+                <Col xs={12} md={8}>
+                  <Form.Range
+                    min="-10"
+                    max="10"
+                    value={noiseReduction}
+                    onChange={(e) => setNoiseReduction(parseInt(e.target.value))}
+                    className={`form-range-${theme}`}
+                  />
+                </Col>
+              </Row>
+
+              {/* Record Button */}
+              <Row className="mb-3">
+                <Col xs={12} md={4}>
+                  <Form.Label className="mb-0 fw-bold">Record Audio:</Form.Label>
+                </Col>
+                <Col xs={12} md={8}>
+                  <Button
+                    variant={isRecording ? 'danger' : 'success'}
+                    onClick={() => setIsRecording(!isRecording)}
+                    className="w-100 hover-btn-scale-sm"
+                  >
+                    {isRecording ? 'Stop Recording' : 'Start Recording'}
+                  </Button>
+                </Col>
+              </Row>
+
+              {/* Time and Signal Level Display */}
+              <Row className="mb-3 align-items-center">
+                <Col xs={12} md={6}>
+                  <div className={`p-2 rounded text-center fw-bold bg-${inputBg} text-${inputText} border border-info`}>
+                    Time: {currentTime}
+                  </div>
+                </Col>
+                <Col xs={12} md={6}>
+                  <div className={`p-2 rounded text-center fw-bold bg-${inputBg} text-${inputText} border border-info`}>
+                    Signal: {currentSignalLevel} dB
+                  </div>
+                </Col>
+              </Row>
+            </Card.Body>
+          </Card>
+
+          {/* Frequency Spectrum and Station Activity Panel */}
+          <Card id="frequency-spectrum-panel" className={`shadow-sm mt-5 p-4 rounded-lg bg-${cardBg} text-${cardText}`}>
+            <Card.Body>
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h3 className="h4 fw-bold mb-0">Frequency Spectrum and Station Activity Panel</h3>
+                {/* Placeholder for Navigation & Display Tools (top-right icons) */}
+                <div className="d-flex gap-2">
+                  <Button variant="outline-secondary" size="sm" title="Help" className="hover-btn-scale-sm">?</Button>
+                  <Button variant="outline-secondary" size="sm" title="Status" className="hover-btn-scale-sm">S</Button>
+                  <Button variant="outline-secondary" size="sm" title="Log" className="hover-btn-scale-sm">L</Button>
+                  <Button variant="outline-secondary" size="sm" title="Receiver" className="hover-btn-scale-sm">Rx</Button>
+                  <Button variant="outline-secondary" size="sm" title="Map" className="hover-btn-scale-sm">M</Button>
+                  <Button variant="outline-secondary" size="sm" title="Files" className="hover-btn-scale-sm">F</Button>
+                  <Button variant="outline-secondary" size="sm" title="Settings" className="hover-btn-scale-sm">⚙️</Button>
+                </div>
+              </div>
+              <p className={`${mutedText} small`}>
+                Displaying activity for {selectedReceiver.name} ({selectedReceiver.location}, Grid: JN61fw - simulated)
+              </p>
+
+              {/* Spectrum Canvas */}
+              <h5 className={`mt-4 mb-2 text-${theme === 'light' ? 'primary' : 'info'}`}>Spectrum</h5>
+              <div className="spectrum-canvas-container" style={{ position: 'relative', width: '100%', height: '250px', border: `1px solid ${theme === 'light' ? '#ccc' : '#555'}`, borderRadius: '4px', overflow: 'hidden', cursor: isDraggingCursor ? 'grabbing' : 'grab' }}>
+                <canvas
+                  ref={spectrumCanvasRef}
+                  width="800"
+                  height="250"
+                  style={{ display: 'block', width: '100%', height: '100%' }}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseLeave} // Stop dragging if mouse leaves canvas area
+                ></canvas>
+              </div>
+
+              {/* Waterfall Canvas */}
+              <h5 className={`mt-4 mb-2 text-${theme === 'light' ? 'primary' : 'info'}`}>Waterfall</h5>
+              <div className="waterfall-canvas-container" style={{ position: 'relative', width: '100%', height: '200px', border: `1px solid ${theme === 'light' ? '#ccc' : '#555'}`, borderRadius: '4px', overflow: 'hidden' }}>
+                <canvas ref={waterfallCanvasRef} width="800" height="200" style={{ display: 'block', width: '100%', height: '100%' }}></canvas>
+              </div>
+
+              {/* Waterfall Controls */}
+              <div className="mt-4">
+                <h5 className={`mb-3 text-${theme === 'light' ? 'primary' : 'info'}`}>Waterfall Color Levels (dBm)</h5>
+                <Row className="align-items-center mb-3">
+                  <Col xs={12} md={2}>
+                    <Form.Label className={`mb-0 text-${cardText}`}>Min Level: {waterfallMinLevel} dBm</Form.Label>
+                  </Col>
+                  <Col xs={12} md={10}>
+                    <Form.Range
+                      min="-150"
+                      max="-50"
+                      step="1"
+                      value={waterfallMinLevel}
+                      onChange={(e) => setWaterfallMinLevel(parseInt(e.target.value))}
+                      className={`form-range-${theme}`}
+                    />
+                  </Col>
+                </Row>
+                <Row className="align-items-center">
+                  <Col xs={12} md={2}>
+                    <Form.Label className={`mb-0 text-${cardText}`}>Max Level: {waterfallMaxLevel} dBm</Form.Label>
+                  </Col>
+                  <Col xs={12} md={10}>
+                    <Form.Range
+                      min="-40"
+                      max="0"
+                      step="1"
+                      value={waterfallMaxLevel}
+                      onChange={(e) => setWaterfallMaxLevel(parseInt(e.target.value))}
+                      className={`form-range-${theme}`}
+                    />
+                  </Col>
+                </Row>
+              </div>
+
+              <p className={`${mutedText} mt-3 small`}>
+                This panel displays simulated real-time spectrum and waterfall data, along with station markers. Drag the vertical cursor on the spectrum to simulate tuning.
+              </p>
+            </Card.Body>
+          </Card>
+        </>
       )}
 
       {/* Custom CSS for the animated row and links, mimicking the original */}
@@ -532,6 +874,15 @@ function ReceiverbookContent({ theme }) {
         }
         .form-range-dark::-moz-range-thumb {
           background-color: #0dcaf0;
+        }
+
+        /* Small button hover effect */
+        .hover-btn-scale-sm {
+          transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        }
+        .hover-btn-scale-sm:hover {
+          transform: translateY(-1px) scale(1.02);
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
         }
       `}</style>
     </Card>
